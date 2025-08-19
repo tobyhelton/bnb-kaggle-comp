@@ -1,0 +1,886 @@
+---
+title: "810Report"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-05-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+.
+```{r, include=FALSE}
+df <- read.csv("C:/Users/tobyr/OneDrive/Desktop/810/entrepot_cleaned.csv")
+library(ggplot2)
+library(dplyr)
+library(sf)
+library(ggplot2)
+library(viridis)
+library(lubridate)
+library(tidyverse)
+library(tidymodels)
+library(fastDummies)
+library(pcalg)
+library(Rgraphviz)
+library(bnlearn)
+library(vip)
+library(grf)
+library(tpc)
+
+# Define function early
+mygraph <- function(pcgraph){
+  g <- bnlearn::as.bn(pcgraph, check.cycles = FALSE)
+  bnlearn::graphviz.plot(g, shape = "ellipse")
+}
+```
+
+### Intro
+  Entrepôt, the 10th arrondissement of Paris, is a vibrant and culturally diverse district with a population of 81,926 (2022). Known historically for its warehouses ("entrepôts") that facilitated trade along the Canal Saint-Martin, the area today is a dynamic hub of multicultural influences, including a large Turkish community ("La Petite Turquie"), as well as Indian, Pakistani, North African, and Caribbean populations. This fusion is reflected in its lively streets, diverse culinary scene—such as Passage Brady’s "Little India"—and its appeal to young professionals and students seeking affordability in Paris.
+
+Strategically located, Entrepôt is home to two of Paris’ busiest railway stations, Gare du Nord and Gare de l’Est, making it a key transit hub with high foot traffic. The presence of the Canal Saint-Martin further enhances its charm, offering scenic waterways that attract both locals and tourists.
+
+For potential investors considering Airbnb properties in Entrepôt, these are the questions we've decided to look into:
+
+If you’re looking to buy property in Entrepôt, which physical characteristics are most important to consider to achieve high
+booking?
+
+Does proximity to major landmarks (Gare du Nord, Gare de l’Est, Canal Saint-Martin) correlate with higher demand?
+
+Once you’ve bought property in Entrepôt, what characteristics should you include in your listing to boost it to high booking?
+
+### Background Info - Looking Into the Neighborhoods of Entrepôt
+```{r, include=FALSE}
+ 
+#Paris official quartiers (neighborhoods)
+
+quartiers <- st_read("C:/Users/tobyr/OneDrive/Desktop/810/quartier_paris.geojson")
+ 
+# Filter to the 10th arrondissement
+
+quartiers_10 <- quartiers %>%
+  filter(c_ar == "10")  
+ 
+ 
+df_filtered <- df %>%
+  filter(high_booking == 1, price > 0)
+ 
+ 
+df_sf <- st_as_sf(df_filtered, coords = c("longitude", "latitude"), crs = 4326)
+ 
+ 
+quartiers_10 <- st_transform(quartiers_10, crs = st_crs(df_sf))
+ 
+ 
+df_labeled <- st_join(df_sf, quartiers_10, join = st_within)
+ 
+ 
+table(df_labeled$l_qu)  
+ 
+ 
+df_all_sf <- df %>%
+  filter(price > 0) %>%
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+ 
+df_all_labeled <- st_join(df_all_sf, quartiers_10 %>% select(l_qu), join = st_within)
+ 
+booking_pct_stats <- df_all_labeled %>%
+  st_drop_geometry() %>%
+  group_by(l_qu) %>%
+  summarise(
+    total_listings = n(),
+    high_booking_count = sum(high_booking == 1, na.rm = TRUE),
+    high_booking_pct = round(100 * high_booking_count / total_listings, 1)
+  )
+ 
+#Summary stats for high-booking listings only
+summary_stats <- df_labeled %>%
+  filter(high_booking == 1) %>%
+  st_drop_geometry() %>%
+  group_by(l_qu) %>%
+  summarise(
+    avg_price = mean(price, na.rm = TRUE),
+    pct_superhost = mean(host_is_superhost == 1, na.rm = TRUE) * 100,
+    avg_accommodates = mean(accommodates, na.rm = TRUE),
+    listing_count = n()
+  )
+ 
+ 
+summary_stats <- left_join(summary_stats, booking_pct_stats, by = "l_qu")
+ 
+ 
+print(summary_stats)
+```
+
+```{r}
+ggplot() +
+  geom_sf(data = quartiers_10, fill = "gray95", color = "black") +
+  geom_sf(data = df_labeled, aes(color = l_qu), size = 2, alpha = 0.7) +
+  scale_color_viridis_d(name = "Neighborhood") +
+  labs(
+    title = "High-Booking Listings in Entrepôt",
+    subtitle = "Colored by Neighborhood",
+  ) +
+  theme_minimal()
+
+print(summary_stats)
+```
+
+### Conducting EDA
+The histogram below shows the optimal range by showing where most high-booking properties cluster, which is around the $75 median price. This helps tell us what price point buyers and renters find most attractive. 
+The log scale helps demonstrate that extreme outliers book far less frequently and helps make it so the histogram is not heavily skewed to the right.
+```{r, include=FALSE}
+df_unique <- df %>% distinct(id, .keep_all = TRUE)
+# Calculate stats
+stats <- df %>%
+  filter(high_booking == 1, price > 0) %>%
+  summarise(
+    min_price = min(price),
+    max_price = max(price),
+    mean_price = mean(price),
+    median_price = median(price)
+  )
+ 
+# Extract values
+min_val <- stats$min_price
+max_val <- stats$max_price
+mean_val <- stats$mean_price
+median_val <- stats$median_price
+```
+
+```{r}
+# Plot Price Distribution
+df %>%
+  filter(high_booking == 1, price > 0) %>%
+  ggplot(aes(price)) +
+  geom_histogram(bins = 50, fill = "salmon", color = "white") +
+  scale_x_log10() +
+  geom_vline(xintercept = mean_val, color = "blue", linetype = "dashed", size = 1) +
+  geom_vline(xintercept = median_val, color = "darkgreen", linetype = "dashed", size = 1) +
+  annotate("text", x = max_val, y = Inf, hjust = 1.05, vjust = 1.5,
+           label = paste0("Min: $", round(min_val, 0)), color = "gray30", size = 4) +
+  annotate("text", x = max_val, y = Inf, hjust = 1.05, vjust = 3,
+           label = paste0("Median: $", round(median_val, 0)), color = "darkgreen", size = 4) +
+  annotate("text", x = max_val, y = Inf, hjust = 1.05, vjust = 4.5,
+           label = paste0("Mean: $", round(mean_val, 0)), color = "blue", size = 4) +
+  annotate("text", x = max_val, y = Inf, hjust = 1.05, vjust = 6,
+           label = paste0("Max: $", round(max_val, 0)), color = "gray30", size = 4) +
+  labs(
+    title = "Price Distribution (High-Booking Listings)",
+    x = "Price (log scale)",
+    y = "Count"
+  ) +
+  theme_minimal()
+```
+
+Next we created a bar chart which reveals that private rooms and entire home/apartments deliver the highest booking ratios, suggesting that privacy and autonomy are what guests prioritize. 
+On the other hand, shared or hotel rooms underperform, so prioritizing standalone units will likely maximize return when making an investment.
+
+```{r}
+df %>%
+  group_by(room_type) %>%
+  summarise(
+    n = n(),
+    high_rate = mean(high_booking),
+    avg_price = mean(price, na.rm = TRUE)
+  ) %>%
+  arrange(desc(high_rate)) %>%
+  slice(1:10) %>%
+  ggplot(aes(
+    x = reorder(room_type, high_rate),
+    y = high_rate
+  )) +
+    geom_col(fill = "steelblue") +
+    coord_flip() +
+    labs(
+      title = "Top Property Types by High-Booking Rate",
+      x = "Room Type",
+      y = "High-Booking Proportion"
+    )
+```
+
+The line trend chart below shows how booking rates rose steadily through 2020, dipped during early‑2024, then began rebounding. This indicates seasonality and broader demand cycles. 
+Timing your market entry and listing updates around high‑demand months can further amplify your property’s visibility and booking success.
+
+```{r}
+df %>%
+  mutate(month = floor_date(ymd(date), "month")) %>%
+  group_by(month) %>%
+  summarise(high_rate = mean(high_booking)) %>%
+  ggplot(aes(x = month, y = high_rate)) +
+    geom_line(size = 1, color = "steelblue") +
+    labs(x = "Month", y = "High-Booking Rate",
+         title = "Trend of High-Booking Proportion")
+```
+
+Part of our Exploratory Data Analysis for this project was focused on the variable "host_is_superhost". Our initial assumption was that Superhosts should attract more reservations because guests often filter for superhosts as a signal of reliability, responsiveness, and a high-quality stay. From an investor’s standpoint, properties managed by Superhosts would be expected to enjoy above-average occupancy and revenue, so mapping out the relationship between Superhost status and booking performance is a natural first step for EDA. Although, when looking at descriptive statistics related to superhost status, only 19.3% of unique listings in the Entrepôt sample ever achieve Superhost status, and among those that do, not all translate that reputation into consistent “high_booking” performance. In fact, the numbers show that only 7.4% of Superhost listings fall into the highest-booking category, and many top-performing properties are not Superhost at all. By focusing on this variable, we can uncover if other factors such as pricing strategy, seasonal availability, or neighborhood dynamics are stronger drivers of demand than just Superhost status. 
+
+```{r, include=FALSE}
+# Filter the data for high_booking == 1
+high_booking_data <- df %>% 
+  filter(high_booking == 1)
+
+not_high_booking_data <- df %>% 
+  filter(high_booking == 0)
+
+# Total unique IDs
+total_ids <- df %>% 
+  summarise(total = n_distinct(id)) %>% 
+  pull(total)
+
+# Unique IDs with high_booking == 1
+high_ids <- df %>% 
+  filter(high_booking == 1) %>% 
+  summarise(high = n_distinct(id)) %>% 
+  pull(high)
+
+# Percentage
+pct_high_ids <- high_ids / total_ids * 100
+
+# Unique IDs where host_is_superhost == 1
+superhost_ids <- df %>% 
+  filter(host_is_superhost == 1) %>% 
+  summarise(super = n_distinct(id)) %>% 
+  pull(super)
+
+# Percentage of unique IDs that are superhosts
+pct_superhosts <- superhost_ids / total_ids * 100
+
+# Unique IDs where both high_booking == 1 AND host_is_superhost == 1
+both_ids <- df %>% 
+  filter(high_booking == 1, host_is_superhost == 1) %>% 
+  summarise(both = n_distinct(id)) %>% 
+  pull(both)
+
+# Percentage of unique IDs satisfying both conditions
+pct_both <- both_ids / total_ids * 100
+
+stats <- df %>%
+  summarise(
+    total_ids       = n_distinct(id),
+    superhost_ids   = n_distinct(id[host_is_superhost == 1]),
+    highbooking_ids = n_distinct(id[high_booking == 1]),
+    both_ids        = n_distinct(id[host_is_superhost == 1 & high_booking == 1])
+  ) %>%
+  pivot_longer(
+    cols = -total_ids,
+    names_to  = "metric",
+    values_to = "count"
+  ) %>%
+  mutate(
+    percentage = count / total_ids * 100,
+    metric     = recode(metric,
+                        superhost_ids   = "Superhost IDs",
+                        highbooking_ids = "High‑booking IDs",
+                        both_ids        = "High‑booking & Superhost IDs")
+  )
+```
+
+```{r}
+# Unique IDs with high_booking == 1
+cat("Total unique IDs:", total_ids, "\n",
+    "High‑booking IDs:", high_ids, "\n",
+    "Percent high‑booking IDs:", round(pct_high_ids, 2), "%\n")
+
+# Unique IDs where host_is_superhost == 1
+cat(
+  "Total unique IDs:       ", total_ids,     "\n",
+  "Superhost unique IDs:  ", superhost_ids, "\n",
+  "Percent superhost IDs: ", round(pct_superhosts, 2), "%\n"
+)
+
+# Unique IDs where both high_booking == 1 AND host_is_superhost == 1
+cat(
+  "Total unique IDs:                ", total_ids, "\n",
+  "High‑booking & Superhost IDs:   ", both_ids, "\n",
+  "Percent satisfying both:        ", round(pct_both, 2), "%\n"
+)
+
+# Bar chart
+ggplot(stats, aes(x = metric, y = percentage, fill = metric)) +
+  geom_col(width = 0.6, show.legend = FALSE) +
+  geom_text(aes(label = paste0(round(percentage, 1), "%")),
+            vjust = -0.3,            
+            size  = 6) +             
+  scale_y_continuous(
+    expand = expansion(mult = c(0, 0.15))  
+  ) +
+  labs(
+    title = "Percentage of Unique Listings by Category",
+    x     = NULL,
+    y     = "Percentage of Unique IDs"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+```
+
+### Enough EDA, Let's Create Some DAGs
+DAGs clarify how different property features—like location, amenities, and pricing—actually influence Airbnb performance in Entrepôt, separating true drivers of demand from misleading correlations. By mapping these cause-and-effect relationships, DAGs help investors avoid costly oversights (e.g., overvaluing "luxury" features that don’t impact bookings) and instead focus on high-impact factors, such as proximity to transit or micro-neighborhood trends. This ensures data-driven decisions maximize occupancy rates and ROI, not just guesswork.
+
+```{r, include=TRUE}
+# Convert logical fields to binary (1 = TRUE, 0 = FALSE)
+data <- df %>%
+  mutate(
+    host_identity_verified = ifelse(host_identity_verified == "TRUE", 1, 0),
+    host_has_profile_pic = ifelse(host_has_profile_pic == "TRUE", 1, 0)
+  )
+
+# Convert host_response_rate to numeric if it's a string like "90%"
+data$host_response_rate <- as.numeric(gsub("%", "", data$host_response_rate))
+
+# Convert host_response_time to factor with meaningful labels (if needed)
+# Optional: skip this if already numeric in your dataset
+#data$host_response_time <- as.factor(data$host_response_time)
+
+# Handle missing values: remove rows with NA in key variables (or you can impute)
+key_vars3 <- c(
+  "high_booking", "host_is_superhost", "instant_bookable",
+  "host_response_rate", "host_identity_verified",
+   "accommodates", "bedrooms",
+  "review_scores_rating", "price"
+)
+
+data_selected = data[, key_vars3]
+
+suffStat <- list(C = cor(data_selected), n = nrow(data_selected))
+
+varNames <- colnames(data_selected)
+
+skel.entrepot <- pcalg::skeleton(suffStat, indepTest = gaussCItest, labels = varNames, alpha = 0.05)
+
+#mygraph(skel.entrepot)
+
+start_time <- Sys.time()
+
+pc.entrepot <- pc(suffStat, indepTest = gaussCItest, labels = varNames, alpha = 0.01)
+
+end_time <- Sys.time()
+
+end_time - start_time
+
+
+```
+
+
+Below is an initial DAG created to try and discover any causal relationships with the high_booking variable. From this DAG, we can see that there are 4 potential causes for high_booking: host_is_superhost, accommodates, host_identity_verified and instant_bookable. While we do not know for certain if these variables cause high_booking because of potential hidden colliders or confounders, this DAG can give use a good starting point into discovering causal relationships. Additionally, this DAG can give us insight to understand that price does not have a deterministic relationship with high_booking. 
+
+```{r}
+mygraph(pc.entrepot)
+```
+
+```{r}
+key_vars6 <- c(
+  "high_booking", "instant_bookable",
+  "host_response_rate", "host_identity_verified",
+   "accommodates",
+  "review_scores_rating", "price", "reviews_per_month",
+  "host_response_time"
+)
+
+data_selected = data[, key_vars6]
+
+suffStat <- list(C = cor(data_selected), n = nrow(data_selected))
+
+varNames <- colnames(data_selected)
+
+skel.entrepot4 <- pcalg::skeleton(suffStat, indepTest = gaussCItest, labels = varNames, alpha = 0.05)
+
+mygraph(skel.entrepot4)
+
+start_time <- Sys.time()
+
+pc.entrepot4 <- pc(suffStat, indepTest = gaussCItest, labels = varNames, alpha = 0.01)
+
+end_time <- Sys.time()
+
+end_time - start_time
+
+```
+
+This next DAG uses the different room types variables and also removes the superhost status. We chose to remove the superhost status because we deemed it may be irrelevant from earlier analysis. The main takeaway from this diagram is that host_response_rate may have causal influence on high_booking. While we found that a specific roomtype has no causal influence on high_booking, we were ultimately wrong to include these variables in the way we did. The room types variables should have been set as exogenous variables, since so other variable can change their status.
+
+```{r}
+mygraph(pc.entrepot4)
+```
+
+```{r}
+key_vars6 <- c(
+  "high_booking", "instant_bookable",
+  "host_response_rate", "host_identity_verified",
+   "accommodates",
+  "review_scores_rating", "price", "reviews_per_month",
+  "host_response_time"
+)
+
+data_selected = data[, key_vars6]
+
+suffStat <- list(C = cor(data_selected), n = nrow(data_selected))
+
+varNames <- colnames(data_selected)
+
+skel.entrepot4 <- pcalg::skeleton(suffStat, indepTest = gaussCItest, labels = varNames, alpha = 0.05)
+
+mygraph(skel.entrepot4)
+
+start_time <- Sys.time()
+
+pc.entrepot4 <- pc(suffStat, indepTest = gaussCItest, labels = varNames, alpha = 0.01)
+
+end_time <- Sys.time()
+
+end_time - start_time
+
+```
+
+This final DAG adds the reviews_per_month and host_response_time variables. The main takeaways from the additions here is that accommodates, instantly_bookable and host_identity seem to be most
+important in causing high_booking, as these variables have shown up multiple times in the DAGs. We also discovered that reviews_per_month has a potential causal relationship with high_booking. Overall, these DAGs we created were used to gain a visual representation of which variables are most important when considering how we can predict an Airbnb listing is high_booking or not.  
+
+```{r}
+mygraph(pc.entrepot4)
+```
+
+
+### Looking at Conditional Average Treatment Effect of Variables Across Different Price Ranges
+For investors evaluating Airbnb properties in Entrepôt, Conditional Average Treatment Effect (CATE) modeling unlocks precision by revealing how the impact of key features varies across market segments—not just on average. Unlike traditional analytics that might suggest "walkability always boosts bookings," CATE quantifies where and for whom it matters most (e.g., a 15% occupancy lift in mid-tier units near Gare du Nord, but just 5% in luxury properties). This allows investors to:
+
+Target upgrades strategically (e.g., prioritize parking in budget areas, not high-end),
+
+Optimize pricing tiers (balconies command premiums in scenic zones but add little value elsewhere), and
+
+Identify undervalued micro-markets (e.g., "workspace" appeals disproportionately to digital nomads in specific neighborhoods).
+
+Below you'll see our CATE analysis using distances to key landmarks as well as super host and accommodates.
+
+```{r, include=FALSE}
+df <- df %>%
+  mutate(
+    month = month(date)  # Extracts month as numeric (1=Jan, 12=Dec)
+  )
+
+df <- df %>% mutate(Canal_Lat = 48.87009)
+df <- df %>% mutate(Canal_Lon =  2.36701)
+
+df <- df %>% mutate(Station_Lat = 48.87694)
+df <- df %>% mutate(Station_Lon =  2.35915)
+
+df <- df %>% mutate(StationNord_Lat = 48.88073)
+df <- df %>% mutate(StationNord_Lon =  2.35494)
+
+df <- df %>% mutate(Club_Lat = 48.87279)
+df <- df %>% mutate(Club_Lon =  2.35523)
+
+# Function to calculate distance in miles using Haversine formula
+haversine <- function(lat1, lon1, lat2, lon2) {
+  # Convert degrees to radians
+  lat1 <- lat1 * pi / 180
+  lon1 <- lon1 * pi / 180
+  lat2 <- lat2 * pi / 180
+  lon2 <- lon2 * pi / 180
+  
+  # Radius of Earth in miles
+  R <- 3958.8
+  
+  # Differences
+  dlat <- lat2 - lat1
+  dlon <- lon2 - lon1
+  
+  # Haversine formula
+  a <- sin(dlat/2)^2 + cos(lat1) * cos(lat2) * sin(dlon/2)^2
+  c <- 2 * atan2(sqrt(a), sqrt(1-a))
+  distance <- R * c
+  
+  return(distance)
+}
+
+# Apply to your data
+df$distance_to_station <- haversine(df$latitude_cleansed, df$longitude_cleansed, 
+                                         df$Station_Lat, df$Station_Lon)
+
+df$distance_to_canal <- haversine(df$latitude_cleansed, df$longitude_cleansed,
+                                       df$Canal_Lat, df$Canal_Lon)
+
+df$distance_to_club <- haversine(df$latitude_cleansed, df$longitude_cleansed,
+                                      df$Club_Lat, df$Club_Lon)
+
+df$distance_to_station2 <- haversine(df$latitude_cleansed, df$longitude_cleansed,
+                                      df$StationNord_Lat, df$StationNord_Lon)
+
+df$property_type <- as.factor(df$property_type)
+df$room_type <- as.factor(df$room_type)
+df$high_booking <- as.factor(df$high_booking)
+# Ensure 'id' is numeric and create a factor version for fixed effects
+df_cf <- df %>%
+  select(high_booking, host_response_time, host_response_rate, host_is_superhost, accommodates, bathrooms, bedrooms, beds, price, minimum_nights, maximum_nights, review_scores_rating, review_scores_accuracy, review_scores_cleanliness, review_scores_checkin, review_scores_communication, review_scores_location, review_scores_value, reviews_per_month, instant_bookable, distance_to_station, distance_to_canal, distance_to_club, id) %>%
+  na.omit() %>%
+  mutate(
+    id_numeric = as.numeric(as.factor(id))
+  )
+
+df_cf$high_booking <- as.numeric(df_cf$high_booking)
+
+str(df_cf)
+
+# Covariate matrix (X) - include all confounders
+X <- df_cf %>% 
+  select(-distance_to_station, -high_booking) %>% 
+  as.matrix()
+
+# Treatment (W) and outcome (Y)
+W <- df_cf$distance_to_station
+Y <- df_cf$high_booking
+
+cf <- causal_forest(
+  X = X,
+  Y = Y,
+  W = W,
+  clusters = df_cf$id_numeric,  # Cluster by listing ID
+  num.trees = 1000,              # As per hint
+  seed = 3.14159
+)
+
+# Average Treatment Effect (ATE) on the full sample
+ate <- average_treatment_effect(
+  cf,
+  target.sample = "all",         # Average over all observations
+  method = "AIPW",               # Augmented IPW for robustness
+  num.trees.for.weights = 500    # As per hint
+)
+
+# Define price tiers
+price_tiers <- list(
+  "Low (<$100)" = df_cf$price < 100,
+  "Medium ($100–$250)" = df_cf$price >= 100 & df_cf$price <= 250,
+  "High (>$250)" = df_cf$price > 250
+)
+
+# Compute CATE for each tier
+cate_results <- lapply(names(price_tiers), function(tier) {
+  ate <- average_treatment_effect(
+    cf,
+    subset = price_tiers[[tier]],
+    method = "AIPW",
+    num.trees.for.weights = 500
+  )
+  data.frame(
+    Price_Tier = tier,
+    CATE = ate[1],
+    SE = ate[2],
+    Lower_CI = ate[1] - 1.96 * ate[2],
+    Upper_CI = ate[1] + 1.96 * ate[2]
+  )
+}) %>% bind_rows()
+```
+
+Distance to Train Station:
+```{r}
+print(paste("CATE (All):", round(ate[1], 4), "| SE:", round(ate[2], 4)))
+
+ggplot(cate_results, aes(x = Price_Tier, y = CATE, color = Price_Tier)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.2) +
+  labs(
+    title = "CATE of Distance to Station by Price Tier",
+    x = "Price Tier",
+    y = "Treatment Effect (Percentage Points)"
+  ) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "none")
+```
+
+```{r, include=FALSE}
+# Covariate matrix (X) - include all confounders
+X <- df_cf %>% 
+  select(-distance_to_club, -high_booking) %>% 
+  as.matrix()
+
+# Treatment (W) and outcome (Y)
+W <- df_cf$distance_to_club
+Y <- df_cf$high_booking
+
+cf <- causal_forest(
+  X = X,
+  Y = Y,
+  W = W,
+  clusters = df_cf$id_numeric,  # Cluster by listing ID
+  num.trees = 1000,              # As per hint
+  seed = 3.14159
+)
+
+# Average Treatment Effect (ATE) on the full sample
+ate <- average_treatment_effect(
+  cf,
+  target.sample = "all",         # Average over all observations
+  method = "AIPW",               # Augmented IPW for robustness
+  num.trees.for.weights = 500    # As per hint
+)
+
+# Define price tiers
+price_tiers <- list(
+  "Low (<$100)" = df_cf$price < 100,
+  "Medium ($100–$250)" = df_cf$price >= 100 & df_cf$price <= 250,
+  "High (>$250)" = df_cf$price > 250
+)
+
+# Compute CATE for each tier
+cate_results <- lapply(names(price_tiers), function(tier) {
+  ate <- average_treatment_effect(
+    cf,
+    subset = price_tiers[[tier]],
+    method = "AIPW",
+    num.trees.for.weights = 500
+  )
+  data.frame(
+    Price_Tier = tier,
+    CATE = ate[1],
+    SE = ate[2],
+    Lower_CI = ate[1] - 1.96 * ate[2],
+    Upper_CI = ate[1] + 1.96 * ate[2]
+  )
+}) %>% bind_rows()
+```
+
+Distance to the Club
+```{r}
+print(paste("CATE (All):", round(ate[1], 4), "| SE:", round(ate[2], 4)))
+
+ggplot(cate_results, aes(x = Price_Tier, y = CATE, color = Price_Tier)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.2) +
+  labs(
+    title = "CATE of Distance to Club by Price Tier",
+    x = "Price Tier",
+    y = "Treatment Effect (Percentage Points)"
+  ) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "none")
+```
+
+```{r, include=FALSE}
+# Covariate matrix (X) - include all confounders
+X <- df_cf %>% 
+  select(-distance_to_canal, -high_booking) %>% 
+  as.matrix()
+
+# Treatment (W) and outcome (Y)
+W <- df_cf$distance_to_canal
+Y <- df_cf$high_booking
+
+cf <- causal_forest(
+  X = X,
+  Y = Y,
+  W = W,
+  clusters = df_cf$id_numeric,  # Cluster by listing ID
+  num.trees = 1000,              # As per hint
+  seed = 3.14159
+)
+
+# Average Treatment Effect (ATE) on the full sample
+ate <- average_treatment_effect(
+  cf,
+  target.sample = "all",         # Average over all observations
+  method = "AIPW",               # Augmented IPW for robustness
+  num.trees.for.weights = 500    # As per hint
+)
+
+# Define price tiers
+price_tiers <- list(
+  "Low (<$100)" = df_cf$price < 100,
+  "Medium ($100–$250)" = df_cf$price >= 100 & df_cf$price <= 250,
+  "High (>$250)" = df_cf$price > 250
+)
+
+# Compute CATE for each tier
+cate_results <- lapply(names(price_tiers), function(tier) {
+  ate <- average_treatment_effect(
+    cf,
+    subset = price_tiers[[tier]],
+    method = "AIPW",
+    num.trees.for.weights = 500
+  )
+  data.frame(
+    Price_Tier = tier,
+    CATE = ate[1],
+    SE = ate[2],
+    Lower_CI = ate[1] - 1.96 * ate[2],
+    Upper_CI = ate[1] + 1.96 * ate[2]
+  )
+}) %>% bind_rows()
+```
+
+Distance to Canal
+```{r}
+print(paste("CATE (All):", round(ate[1], 4), "| SE:", round(ate[2], 4)))
+
+ggplot(cate_results, aes(x = Price_Tier, y = CATE, color = Price_Tier)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.2) +
+  labs(
+    title = "CATE of Distance to Canal by Price Tier",
+    x = "Price Tier",
+    y = "Treatment Effect (Percentage Points)"
+  ) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "none")
+```
+
+
+```{r, include=FALSE}
+# Covariate matrix (X) - include all confounders
+X <- df_cf %>% 
+  select(-host_is_superhost, -high_booking) %>% 
+  as.matrix()
+
+# Treatment (W) and outcome (Y)
+W <- df_cf$host_is_superhost
+Y <- df_cf$high_booking
+
+cf <- causal_forest(
+  X = X,
+  Y = Y,
+  W = W,
+  clusters = df_cf$id_numeric,  # Cluster by listing ID
+  num.trees = 1000,              # As per hint
+  seed = 3.14159
+)
+
+# Average Treatment Effect (ATE) on the full sample
+ate <- average_treatment_effect(
+  cf,
+  target.sample = "all",         # Average over all observations
+  method = "AIPW",               # Augmented IPW for robustness
+  num.trees.for.weights = 500    # As per hint
+)
+
+# Define price tiers
+price_tiers <- list(
+  "Low (<$100)" = df_cf$price < 100,
+  "Medium ($100–$250)" = df_cf$price >= 100 & df_cf$price <= 250,
+  "High (>$250)" = df_cf$price > 250
+)
+
+# Compute CATE for each tier
+cate_results <- lapply(names(price_tiers), function(tier) {
+  ate <- average_treatment_effect(
+    cf,
+    subset = price_tiers[[tier]],
+    method = "AIPW",
+    num.trees.for.weights = 500
+  )
+  data.frame(
+    Price_Tier = tier,
+    CATE = ate[1],
+    SE = ate[2],
+    Lower_CI = ate[1] - 1.96 * ate[2],
+    Upper_CI = ate[1] + 1.96 * ate[2]
+  )
+}) %>% bind_rows()
+```
+
+Super host
+```{r}
+print(paste("CATE (All):", round(ate[1], 4), "| SE:", round(ate[2], 4)))
+
+ggplot(cate_results, aes(x = Price_Tier, y = CATE, color = Price_Tier)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.2) +
+  labs(
+    title = "CATE of Super Host by Price Tier",
+    x = "Price Tier",
+    y = "Treatment Effect (Percentage Points)"
+  ) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "none")
+```
+
+Super host status appears to have a negative effect on low cost properties. This indicates buyers looking for a cheap to medium priced place to stay do not care about super host status or can even be deterred by it
+
+```{r, include=FALSE}
+# Covariate matrix (X) - include all confounders
+X <- df_cf %>% 
+  select(-accommodates, -high_booking) %>% 
+  as.matrix()
+
+# Treatment (W) and outcome (Y)
+W <- df_cf$accommodates
+Y <- df_cf$high_booking
+
+cf <- causal_forest(
+  X = X,
+  Y = Y,
+  W = W,
+  clusters = df_cf$id_numeric,  # Cluster by listing ID
+  num.trees = 1000,              # As per hint
+  seed = 3.14159
+)
+
+# Average Treatment Effect (ATE) on the full sample
+ate <- average_treatment_effect(
+  cf,
+  target.sample = "all",         # Average over all observations
+  method = "AIPW",               # Augmented IPW for robustness
+  num.trees.for.weights = 500    # As per hint
+)
+
+# Define price tiers
+price_tiers <- list(
+  "Low (<$100)" = df_cf$price < 100,
+  "Medium ($100–$250)" = df_cf$price >= 100 & df_cf$price <= 250,
+  "High (>$250)" = df_cf$price > 250
+)
+
+# Compute CATE for each tier
+cate_results <- lapply(names(price_tiers), function(tier) {
+  ate <- average_treatment_effect(
+    cf,
+    subset = price_tiers[[tier]],
+    method = "AIPW",
+    num.trees.for.weights = 500
+  )
+  data.frame(
+    Price_Tier = tier,
+    CATE = ate[1],
+    SE = ate[2],
+    Lower_CI = ate[1] - 1.96 * ate[2],
+    Upper_CI = ate[1] + 1.96 * ate[2]
+  )
+}) %>% bind_rows()
+```
+
+Accommodates
+```{r}
+print(paste("CATE (All):", round(ate[1], 4), "| SE:", round(ate[2], 4)))
+
+ggplot(cate_results, aes(x = Price_Tier, y = CATE, color = Price_Tier)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI), width = 0.2) +
+  labs(
+    title = "CATE of Accommodates by Price Tier",
+    x = "Price Tier",
+    y = "Treatment Effect (Percentage Points)"
+  ) +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") +
+  theme(legend.position = "none")
+```
+
+For each additional person you can accommodate in a low cost apartment, your chance of achieving a high booking rate inreases by 4%.
+
+### Conclusion and Recommendations
+Our analysis reveals clear, actionable insights for investors targeting Entrepôt’s Airbnb market. Location is paramount—properties near Gare de Paris consistently achieve higher booking rates, while proximity to nightlife or canals shows negligible impact. For budget listings (<$100), maximizing occupancy (e.g., through larger guest capacity) is critical, while mid-tier properties benefit most from instant booking and verified host profiles. Surprisingly, "Superhost" status adds little value for cheaper units, suggesting resources are better spent on other features.
+
+To capitalize on these findings:
+
+Prioritize transit-adjacent properties (especially near major stations),
+
+Tailor amenities to price tiers (capacity for budget units, convenience for mid-tier), and
+
+Streamline bookings with instant approval and review incentives.
+
+By combining these location-specific and attribute-driven strategies, investors can minimize risk and maximize returns in Entrepôt’s dynamic short-term rental market.

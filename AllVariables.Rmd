@@ -1,0 +1,288 @@
+---
+title: "NewKaggle"
+output: html_document
+date: "2025-04-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(stringr)
+library(readr)
+library(purrr)
+library(dplyr)
+library(missForest)
+library(mice)
+
+
+train <- read.csv("C:/Users/tobyr/OneDrive/Desktop/810/Final Proj/airbnb-project-msba-kaggle-train.csv")
+test <- read.csv("C:/Users/tobyr/OneDrive/Desktop/810/Final Proj/airbnb-project-msba-kaggle-test.csv")
+
+# First, calculate the NA percentages as you did
+na_summary <- train %>%
+  summarise(across(everything(), ~ mean(is.na(.)) * 100) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_percentage") %>%
+  arrange(desc(na_percentage)))
+
+# Filter columns with <50% NA
+columns_to_keep <- na_summary %>%
+  filter(na_percentage < 50) %>%
+  pull(column)
+
+# Subset the train dataset to keep only these columns
+train_filtered <- train %>%
+  select(all_of(columns_to_keep))
+
+# First, calculate the NA percentages as you did
+na_summary <- train_filtered %>%
+  summarise(across(everything(), ~ mean(is.na(.)) * 100) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_percentage") %>%
+  arrange(desc(na_percentage)))
+
+print(na_summary)
+
+trainClean <- train_filtered %>% select(-summary, -smart_location, -host_about, -neighborhood_overview, -neighbourhood, -host_neighbourhood, -host_location, -description, -amenities, -host_thumbnail_url, -host_verifications, -host_name, -host_picture_url, -listing_url, -host_url, -name, -picture_url, -host_id, -latitude, -longitude, -zipcode, -is_location_exact, -street)
+
+testClean <- test %>% select(-summary, -smart_location, -host_about, -neighborhood_overview, -neighbourhood, -host_neighbourhood, -host_location, -description, -amenities, -host_thumbnail_url, -host_verifications, -host_name, -host_picture_url, -listing_url, -host_url, -name, -picture_url, -host_id, -latitude, -longitude, -zipcode, -is_location_exact, -street)
+
+
+# Cleaning
+#trainClean <- train %>% select(high_booking, state, city, host_id, host_response_time, host_response_rate, host_acceptance_rate, host_is_superhost, neighbourhood_cleansed, zipcode, market, property_type, room_type, accommodates, bathrooms, beds, bed_type, square_feet, price, weekly_price, monthly_price, guests_included, extra_people, minimum_nights, maximum_nights, review_scores_rating, review_scores_accuracy, review_scores_cleanliness, review_scores_checkin, review_scores_communication, review_scores_location, review_scores_value, reviews_per_month, requires_license, host_listing_count, host_listings_count, host_total_listings_count, host_identity_verified, security_deposit, cleaning_fee, instant_bookable, cancellation_policy, require_guest_profile_picture, require_guest_phone_verification, latitude_cleansed, longitude_cleansed)
+
+#testClean <- test %>% select( state, city, host_id, host_response_time, host_response_rate, host_acceptance_rate, host_is_superhost, neighbourhood_cleansed, zipcode, market, property_type, room_type, accommodates, bathrooms, beds, bed_type, square_feet, price, weekly_price, monthly_price, guests_included, extra_people, minimum_nights, maximum_nights, review_scores_rating, review_scores_accuracy, review_scores_cleanliness, review_scores_checkin, review_scores_communication, review_scores_location, review_scores_value, reviews_per_month, requires_license, host_listing_count, host_listings_count, host_total_listings_count, host_identity_verified, security_deposit, cleaning_fee, instant_bookable, cancellation_policy, require_guest_profile_picture, require_guest_phone_verification, latitude_cleansed, longitude_cleansed)
+
+# Data Mutation: Train
+trainClean <- trainClean %>% mutate(host_response_time = ifelse(host_response_time == "within an hour", 4, 
+                                                           ifelse(host_response_time == "within a few hours", 3, 
+                                                           ifelse(host_response_time == "within a day", 2, 
+                                                           ifelse(host_response_time == "a few days or more", 1, 0)))))
+
+trainClean <- trainClean %>% mutate(host_response_rate = as.numeric(str_remove(host_response_rate, "%")))
+
+trainClean <- trainClean %>% mutate(host_acceptance_rate = as.numeric(str_remove(host_acceptance_rate, "%")))
+
+trainClean <- trainClean %>% mutate(host_is_superhost = ifelse(host_is_superhost == FALSE, 0, 1))
+
+trainClean$host_is_superhost = as.numeric(trainClean$host_is_superhost)
+
+trainClean <- trainClean %>% mutate(price = parse_number(price))
+
+trainClean <- trainClean %>% mutate(host_has_profile_pic = ifelse(host_has_profile_pic == FALSE, 0, 1))
+
+trainClean$host_has_profile_pic = as.numeric(trainClean$host_has_profile_pic)
+
+#trainClean <- trainClean %>% mutate(weekly_price = parse_number(weekly_price))
+
+#trainClean <- trainClean %>% mutate(monthly_price = parse_number(monthly_price))
+
+#trainClean <- trainClean %>% mutate(security_deposit = parse_number(security_deposit))
+
+#trainClean <- trainClean %>% mutate(cleaning_fee = parse_number(cleaning_fee))
+
+trainClean <- trainClean %>% mutate(extra_people = parse_number(extra_people))
+
+trainClean <- trainClean %>% mutate(requires_license = ifelse(requires_license == FALSE, 0, 1))
+
+trainClean <- trainClean %>% mutate(host_identity_verified = ifelse(host_identity_verified == FALSE, 0, 1))
+
+trainClean <- trainClean %>% mutate(instant_bookable = ifelse(instant_bookable == FALSE, 0, 1))
+
+trainClean <- trainClean %>% mutate(require_guest_phone_verification = ifelse(require_guest_phone_verification == FALSE, 0, 1))
+
+trainClean <- trainClean %>% mutate(require_guest_profile_picture = ifelse(require_guest_profile_picture == FALSE, 0, 1))
+
+# Now Test Set
+# Data Mutation: Test
+testClean <- testClean %>% mutate(host_response_time = ifelse(host_response_time == "within an hour", 4, 
+                                                           ifelse(host_response_time == "within a few hours", 3, 
+                                                           ifelse(host_response_time == "within a day", 2, 
+                                                           ifelse(host_response_time == "a few days or more", 1, 0)))))
+
+testClean <- testClean %>% mutate(host_response_rate = as.numeric(str_remove(host_response_rate, "%")))
+
+testClean <- testClean %>% mutate(host_acceptance_rate = as.numeric(str_remove(host_acceptance_rate, "%")))
+
+testClean <- testClean %>% mutate(host_is_superhost = ifelse(host_is_superhost == FALSE, 0, 1))
+
+testClean$host_is_superhost = as.numeric(testClean$host_is_superhost)
+
+testClean <- testClean %>% mutate(price = parse_number(price))
+
+testClean <- testClean %>% mutate(host_has_profile_pic = ifelse(host_has_profile_pic == FALSE, 0, 1))
+
+testClean$host_has_profile_pic = as.numeric(testClean$host_has_profile_pic)
+
+#testClean <- testClean %>% mutate(weekly_price = parse_number(weekly_price))
+
+#testClean <- testClean %>% mutate(monthly_price = parse_number(monthly_price))
+
+#testClean <- testClean %>% mutate(security_deposit = parse_number(security_deposit))
+
+#testClean <- testClean %>% mutate(cleaning_fee = parse_number(cleaning_fee))
+
+testClean <- testClean %>% mutate(extra_people = parse_number(extra_people))
+
+testClean <- testClean %>% mutate(requires_license = ifelse(requires_license == FALSE, 0, 1))
+
+testClean <- testClean %>% mutate(host_identity_verified = ifelse(host_identity_verified == FALSE, 0, 1))
+
+testClean <- testClean %>% mutate(instant_bookable = ifelse(instant_bookable == FALSE, 0, 1))
+
+testClean <- testClean %>% mutate(require_guest_phone_verification = ifelse(require_guest_phone_verification == FALSE, 0, 1))
+
+testClean <- testClean %>% mutate(require_guest_profile_picture = ifelse(require_guest_profile_picture == FALSE, 0, 1))
+
+trainClean <- trainClean %>% 
+  mutate(across(where(~ is.character(.) | is.factor(.)), as.factor))
+
+testClean <- testClean %>% 
+  mutate(across(where(~ is.character(.) | is.factor(.)), as.factor))
+
+#testClean <- testClean %>% mutate(high_booking = 0)
+#testClean$high_booking = as.factor(testClean$high_booking)
+trainClean$high_booking = as.factor(trainClean$high_booking)
+
+#trainClean <- trainClean %>% select(-state, -host_id)
+
+#testClean <- testClean %>% select(-state, -host_id)
+
+# Stratified sample (20% total, keeping original high_booking ratio)
+trainClean <- trainClean %>%
+  group_by(high_booking) %>%          # Group by target variable
+  slice_sample(prop = 0.1) %>%        # Sample 20% from each group
+  ungroup()                           # Remove grouping
+
+# Verify proportions
+#trainSimple %>% 
+  #count(high_booking) %>% 
+  #mutate(percent = n / sum(n))
+
+library(tidymodels)
+
+# Remove the line where you add high_booking to testClean
+# testClean <- testClean %>% mutate(high_booking = 0)  # DELETE THIS LINE
+
+# Ensure high_booking is factor in trainClean only
+trainClean$high_booking <- as.factor(trainClean$high_booking)
+
+# Build recipe using only training data
+rec <- recipe(high_booking ~ ., data = trainClean) %>%
+  step_impute_bag(all_numeric(), -all_outcomes()) %>%
+  step_impute_mode(all_nominal(), -all_outcomes()) %>%
+  step_zv(all_predictors(), -all_outcomes()) %>%  # Remove zero-variance predictors
+  step_dummy(all_nominal(), -all_outcomes())
+
+# Preprocess both train and test data
+#prepped <- prep(rec, training = trainClean)
+
+# Get processed data
+#train_processed <- bake(prepped, new_data = trainClean)
+#test_processed <- bake(prepped, new_data = testClean)
+
+# Now train your model on train_processed
+xgb_spec <- boost_tree(
+  mode = "classification",
+  engine = "xgboost",  # <- Switch to XGBoost
+  trees = 5000,        # Number of boosting iterations
+  learn_rate = 0.05,   # Learning rate (eta)
+  tree_depth = 10,      # Max tree depth
+  min_n = 25,          # Min observations in leaf
+  loss_reduction = 3    # Gamma (min gain to split)
+) %>%
+  set_engine(
+    "xgboost",
+    objective = "binary:logistic",  # Binary classification
+    eval_metric = "auc",            # Metric to optimize
+    early_stops = 50                # Early stopping rounds
+  )
+
+xgb_wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(xgb_spec)
+
+# Train with Cross-Validation
+train_folds <- vfold_cv(trainClean, v = 5, strata = high_booking)
+final_model <- fit(xgb_wf, trainClean)
+
+# Make predictions on processed test data
+predictions <- predict(final_model, testClean, type = "prob")
+
+
+
+# Combine predictions with test data
+results <- test %>%
+  bind_cols(predictions)
+
+submit <- results %>% select(unique_id, .pred_1)
+submit <- submit %>% mutate(high_booking = .pred_1)
+submit <- submit %>% select(unique_id, high_booking)
+
+write.csv(submit, file = "C:/Users/tobyr/OneDrive/Desktop/810/Final Proj/submissionXG13.csv", 
+  row.names = FALSE)
+
+library(vip)
+vip(final_model, num_features = 15)
+
+
+
+#prepped <- prep(rec, training = trainSimple)
+#baked <- bake(prepped, new_data = NULL)
+
+# Verify outcome column exists
+#"high_booking" %in% names(baked) 
+```
+
+# Light GBM
+```{r}
+library(bonsai)
+library(tidymodels)
+library(lightgbm)
+library(tidyverse)
+
+# 1. Create cross-validation folds
+train_folds <- vfold_cv(train_data, v = 5, strata = high_booking)
+
+# 2. Recipe: One-hot encoding + LightGBM-friendly preprocessing
+rec <- recipe(high_booking ~ ., data = trainSimple) %>%
+  step_string2factor(all_nominal_predictors()) %>%  # Convert strings to factors first
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%  # One-hot encode
+  step_zv(all_predictors()) %>%                    # Remove zero-variance features
+  step_normalize(all_numeric_predictors())         # Standardize numeric features
+
+# 3. LightGBM model specification
+lgbm_spec <- boost_tree(
+  mode = "classification",
+  engine = "lightgbm",
+  stop_iter = 50
+) %>% 
+  set_engine(
+    "lightgbm",
+    verbose = -1,                   # Silence logs
+    # LightGBM parameters (optimized for one-hot encoded data)
+    max_depth = 6,                  # Control tree depth to avoid overfitting
+    min_data_in_leaf = 20,          # Prevent overfitting on sparse one-hot features
+    feature_fraction = 0.8,         # Randomly subset features per iteration
+    bagging_fraction = 0.9          # Stochastic gradient boosting
+  )
+
+# 4. Workflow
+lgbm_wf <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(lgbm_spec)
+
+# 5. Train with cross-validation (optional)
+cv_results <- fit_resamples(
+  lgbm_wf,
+  train_folds,
+  metrics = metric_set(roc_auc, accuracy)
+)
+
+# 6. Final model and predictions
+final_model <- fit(lgbm_wf, trainSimple)
+predictions <- predict(final_model, testSimple, type = "prob")
+```
+
