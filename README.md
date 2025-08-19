@@ -1,4 +1,4 @@
-#  Predeicting High Booking Properties on Airbnb with Machine Learning (R Project)
+#  Predicting High Booking Properties on Airbnb with Machine Learning (R Project)
 
 ## Project Overview
 This project focuses on identifying **properties which will achieve a high booking rate** using machine learning techniques in **R**.  
