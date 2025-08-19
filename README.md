@@ -10,7 +10,7 @@ The goal was to analyze what factors drives high booking rates and build predict
 
 ---
 
-## 🔧 Tech Stack
+## Tech Stack
 - **Language:** R  
 - **Libraries:** `tidyverse`, `caret`, `missForest`, `ggplot2`, `xgboost`, `glmnet`, `readr`, `dplyr`, `stringr`, `purrr`, `mice`       
 - **Tools:** RStudio, RMarkdown  
@@ -45,4 +45,4 @@ The goal was to analyze what factors drives high booking rates and build predict
 
 ---
 
-## 📂 Repository Structure
+## Repository Structure
