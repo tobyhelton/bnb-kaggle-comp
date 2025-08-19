@@ -4,7 +4,7 @@
 This project focuses on identifying **properties which will achieve a high booking rate** using machine learning techniques in **R**.  
 The goal was to analyze what factors drives high booking rates and build predictive models that could assist potential investors in identifying properties which would be a good investment.
 
-- **Dataset:** [Kaggle Airbnb dataset]('msba-labs-airbnb-large.xlsx').  
+- **Dataset:** Kaggle Airbnb dataset (Cannot Disclose).  
 - **Objective:** Develop models that predict high booking rate properties based on listing features.  
 - **Deliverables:** Exploratory analysis, predictive models, evaluation metrics, final report.
 
